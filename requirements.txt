@@ -1,0 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Jul 30 00:17:12 2026
+
+@author: m.petit
+"""
+
+pandas
+openpyxl
+streamlit
