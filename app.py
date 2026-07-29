@@ -39,12 +39,10 @@ if fichier is not None:
     # Conversion en Datetime
     df = donnees.copy()
     df[col_x] = pd.to_datetime(df[col_x], errors="coerce")
-
-    # Nettoyage des dates valides
     df = df.dropna(subset=[col_x])
 
     # -------------------------------------------------------------
-    # FILTRE PAR PÉRIODE & SAISON (BARRE LATÉRALE)
+    # FILTRE PAR PÉRIODE & SAISON
     # -------------------------------------------------------------
     st.sidebar.markdown("---")
     st.sidebar.header("📅 Filtre Temporel & Saisons")
@@ -52,25 +50,19 @@ if fichier is not None:
     date_min = df[col_x].min().date()
     date_max = df[col_x].max().date()
 
-    # Raccourci par saison
     saison = st.sidebar.radio(
         "Sélection rapide :",
         ["Toutes les données", "❄️ Hiver", "☀️ Été", "🍂 Mi-saison", "✏️ Personnalisé"],
         index=0,
     )
 
-    # Logique d'application des dates
     if saison == "❄️ Hiver":
-        # Décembre, Janvier, Février, Mars
         df_filtre = df[df[col_x].dt.month.isin([12, 1, 2, 3])]
     elif saison == "☀️ Été":
-        # Juin, Juillet, Août
         df_filtre = df[df[col_x].dt.month.isin([6, 7, 8])]
     elif saison == "🍂 Mi-saison":
-        # Avril, Mai, Septembre, Octobre, Novembre
         df_filtre = df[df[col_x].dt.month.isin([4, 5, 9, 10, 11])]
     elif saison == "✏️ Personnalisé":
-        # Sélecteur de dates libres
         plage_dates = st.sidebar.date_input(
             "Choisir la plage de dates :",
             value=(date_min, date_max),
@@ -88,28 +80,23 @@ if fichier is not None:
     else:
         df_filtre = df.copy()
 
-    # Vérification qu'il reste des données
     if df_filtre.empty:
-        st.warning(
-            "Aucune donnée disponible pour la période ou la saison sélectionnée."
-        )
+        st.warning("Aucune donnée disponible pour la période sélectionnée.")
     else:
-        # Affichage de la plage sélectionnée
         st.info(
-            f"📍 **Analyse du {df_filtre[col_x].min().strftime('%d/%m/%Y')} au {df_filtre[col_x].max().strftime('%d/%m/%Y')}** ({len(df_filtre)} points)"
+            f"📍 **Analyse du {df_filtre[col_x].min().strftime('%d/%m/%Y')} au {df_filtre[col_x].max().strftime('%d/%m/%Y')}**"
         )
 
-        # Onglets d'analyse
         tab1, tab2 = st.tabs(
             ["📊 Graphique temporel", "🌙 Analyse Jour / Nuit & Anomalies"]
         )
 
-        # ONGLET 1 : Graphique temporel filtré
+        # ONGLET 1 : Graphique temporel
         with tab1:
-            st.subheader("Courbe de charge temporelle (Période sélectionnée)")
+            st.subheader("Courbe de charge temporelle")
             st.line_chart(df_filtre, x=col_x, y=col_y)
 
-        # ONGLET 2 : Moyennes & Anomalies calculées uniquement sur la sélection !
+        # ONGLET 2 : Synthèse par Jour
         with tab2:
             st.subheader("1. Moyennes par jour de la semaine (Jour vs Nuit)")
 
@@ -129,11 +116,14 @@ if fichier is not None:
                     value=22,
                 )
 
-            # Calculs sur le DataFrame FILTRÉ
+            # Qualification des périodes et des jours
             heures = df_filtre[col_x].dt.hour
             est_jour = (heures >= heure_debut_jour) & (heures < heure_fin_jour)
             df_filtre["Période"] = "🌙 Nuit"
             df_filtre.loc[est_jour, "Période"] = "☀️ Jour"
+
+            # Date exacte (ex: 2024-03-15) pour pouvoir grouper par jour
+            df_filtre["Date_Jour"] = df_filtre[col_x].dt.date
 
             jours_fr = [
                 "1. Lundi",
@@ -148,28 +138,28 @@ if fichier is not None:
                 lambda x: jours_fr[x] if pd.notnull(x) else None
             )
 
-            # Calcul des moyennes uniquement sur la saison/période choisie
+            # Calcul de la moyenne de référence par type de jour et période
             moyennes = df_filtre.groupby(["Jour_Semaine", "Période"])[
                 col_y
             ].transform("mean")
             df_filtre["Moyenne_Reference"] = moyennes
 
+            # Affichage du tableau récapitulatif
             tableau_moyennes = (
                 df_filtre.groupby(["Jour_Semaine", "Période"])[col_y]
                 .mean()
                 .unstack("Période")
             )
-
             st.bar_chart(tableau_moyennes)
             st.dataframe(tableau_moyennes.style.format("{:.2f}"))
 
             st.markdown("---")
 
-            # --- SECTION ANOMALIES SUR LA PÉRIODE ---
-            st.subheader("2. Dépassements par rapport à la moyenne de cette période")
+            # --- SYNTHÈSE DES ANOMALIES PAR JOUR CONCERNÉ ---
+            st.subheader("2. Jours impactés par des dépassements ou creux")
 
             seuil_pct = st.slider(
-                "Seuil d'écart par rapport à la moyenne sélectionnée (%)",
+                "Seuil d'écart par rapport à la moyenne (%)",
                 min_value=5,
                 max_value=100,
                 value=20,
@@ -183,69 +173,98 @@ if fichier is not None:
                 1 - seuil_pct / 100
             )
 
-            depassements = df_filtre[
+            # Détection des points hors limites
+            df_filtre["Est_Depassement"] = (
                 df_filtre[col_y] > df_filtre["Limite_Haute"]
-            ].copy()
-            sous_consommations = df_filtre[
-                df_filtre[col_y] < df_filtre["Limite_Basse"]
-            ].copy()
+            )
+            df_filtre["Est_Creux"] = df_filtre[col_y] < df_filtre["Limite_Basse"]
 
+            # REGROUPEMENT PAR DATE ET PÉRIODE
+            # On ne garde que les combinaisons (Date, Période) qui ont au moins 1 point d'anomalie
+            depassements_synthese = (
+                df_filtre[df_filtre["Est_Depassement"]]
+                .groupby(["Date_Jour", "Jour_Semaine", "Période"])
+                .agg(
+                    Valeur_Max=(col_y, "max"),
+                    Moyenne_Habituelle=("Moyenne_Reference", "first"),
+                    Nb_Points_Anormaux=(col_y, "count"),
+                )
+                .reset_index()
+            )
+
+            creux_synthese = (
+                df_filtre[df_filtre["Est_Creux"]]
+                .groupby(["Date_Jour", "Jour_Semaine", "Période"])
+                .agg(
+                    Valeur_Min=(col_y, "min"),
+                    Moyenne_Habituelle=("Moyenne_Reference", "first"),
+                    Nb_Points_Anormaux=(col_y, "count"),
+                )
+                .reset_index()
+            )
+
+            # Metrics
             col_m1, col_m2 = st.columns(2)
             col_m1.metric(
-                "🔴 Dépassements sur la période", f"{len(depassements)} pts"
+                "🔴 Jours avec dépassement",
+                f"{len(depassements_synthese)} événement(s)",
             )
             col_m2.metric(
-                "🔵 Creux sur la période", f"{len(sous_consommations)} pts"
+                "🔵 Jours en sous-consommation",
+                f"{len(creux_synthese)} événement(s)",
             )
 
             subtab_haut, subtab_bas = st.tabs(
-                ["🔴 Dépassements (Plus élevé)", "🔵 Creux (Plus bas)"]
+                [
+                    "🔴 Jours avec Dépassements",
+                    "🔵 Jours en Sous-consommation",
+                ]
             )
 
             with subtab_haut:
-                if not depassements.empty:
+                if not depassements_synthese.empty:
                     st.warning(
-                        f"Dépassements de plus de +{seuil_pct}% par rapport à la moyenne de la saison/période choisie :"
+                        f"Jours et périodes ayant dépassé de plus de +{seuil_pct}% la moyenne :"
                     )
                     st.dataframe(
-                        depassements[
-                            [
-                                col_x,
-                                "Jour_Semaine",
-                                "Période",
-                                col_y,
-                                "Moyenne_Reference",
-                            ]
-                        ].rename(
+                        depassements_synthese.rename(
                             columns={
-                                col_y: "Valeur Mesurée",
-                                "Moyenne_Reference": "Moyenne de la Période",
+                                "Date_Jour": "Date",
+                                "Jour_Semaine": "Jour",
+                                "Valeur_Max": "Puissance Max Atteinte",
+                                "Moyenne_Habituelle": "Moyenne Attendue",
+                                "Nb_Points_Anormaux": "Nombre de relevés hors norme",
+                            }
+                        ).style.format(
+                            {
+                                "Puissance Max Atteinte": "{:.2f}",
+                                "Moyenne Attendue": "{:.2f}",
                             }
                         )
                     )
                 else:
-                    st.info("Aucun dépassement anormal sur cette période.")
+                    st.info("Aucun jour concerné par un dépassement.")
 
             with subtab_bas:
-                if not sous_consommations.empty:
+                if not creux_synthese.empty:
                     st.info(
-                        f"Consommations inférieures de plus de -{seuil_pct}% à la moyenne de la période :"
+                        f"Jours et périodes inférieurs de plus de -{seuil_pct}% à la moyenne :"
                     )
                     st.dataframe(
-                        sous_consommations[
-                            [
-                                col_x,
-                                "Jour_Semaine",
-                                "Période",
-                                col_y,
-                                "Moyenne_Reference",
-                            ]
-                        ].rename(
+                        creux_synthese.rename(
                             columns={
-                                col_y: "Valeur Mesurée",
-                                "Moyenne_Reference": "Moyenne de la Période",
+                                "Date_Jour": "Date",
+                                "Jour_Semaine": "Jour",
+                                "Valeur_Min": "Puissance Min Atteinte",
+                                "Moyenne_Habituelle": "Moyenne Attendue",
+                                "Nb_Points_Anormaux": "Nombre de relevés hors norme",
+                            }
+                        ).style.format(
+                            {
+                                "Puissance Min Atteinte": "{:.2f}",
+                                "Moyenne Attendue": "{:.2f}",
                             }
                         )
                     )
                 else:
-                    st.info("Aucune sous-consommation anormale sur cette période.")
+                    st.info("Aucun jour concerné par un creux de consommation.")
