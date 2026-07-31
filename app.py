@@ -193,88 +193,78 @@ if fichier is not None:
         st.markdown("---")
 
         # -------------------------------------------------------------
-        # 2. DÉTECTION DES DÉPASSEMENTS (RÉFÉRENCE : MOYENNE DES 3 SEMAINES PRÉCÉDENTES)
+        # 2. DÉTECTION DES DÉPASSEMENTS (MOYENNE DU JOUR vs MOYENNE DES 3 SEMAINES PRÉCÉDENTES)
         # -------------------------------------------------------------
-        st.subheader("2. Dépassements de consommation (Comparaison vs Moyenne des 3 semaines précédentes)")
+        st.subheader("2. Dépassements de la moyenne constatée (vs 3 semaines précédentes)")
 
         seuil_pct = st.slider(
-            "Seuil de dépassement par rapport aux 3 semaines précédentes (%)",
+            "Seuil de dépassement de la moyenne (%)",
             min_value=5,
             max_value=100,
             value=20,
             step=5,
         )
 
-        # Calcul de la moyenne sur 3 semaines glissantes par [Jour_Semaine, Période]
-        # On regroupe d'abord par (Jour de la semaine, Période, Date exacte)
-        moyennes_journalieres = (
+        # 1. Calcul de la MOYENNE EFFECTIVE pour chaque créneau (Date, Jour, Période)
+        synthese_journaliere = (
             df_filtre.groupby(["Date_Jour", "Jour_Semaine", "Période"])[col_y]
             .mean()
             .reset_index()
+            .rename(columns={col_y: "Moyenne_Constatee"})
             .sort_values("Date_Jour")
         )
 
-        # Calcul de la moyenne glissante sur les 3 occurrences précédentes du même (Jour_Semaine, Période)
-        moyennes_journalieres["Moyenne_3_Semaines_Precedentes"] = (
-            moyennes_journalieres.groupby(["Jour_Semaine", "Période"])[col_y]
+        # 2. Calcul de la moyenne glissante des 3 semaines précédentes
+        # Pour chaque (Jour_Semaine, Période), on calcule la moyenne des 3 occurrences passées
+        synthese_journaliere["Moyenne_3_Semaines_Precedentes"] = (
+            synthese_journaliere.groupby(["Jour_Semaine", "Période"])["Moyenne_Constatee"]
             .transform(lambda x: x.shift(1).rolling(window=3, min_periods=1).mean())
         )
 
-        # Fusion des références dans le dataframe d'origine
-        df_filtre = df_filtre.merge(
-            moyennes_journalieres[["Date_Jour", "Période", "Moyenne_3_Semaines_Precedentes"]],
-            on=["Date_Jour", "Période"],
-            how="left"
-        )
+        # 3. Repli sur la moyenne globale du jour si pas assez d'historique (ex: début de fichier)
+        moyenne_globale_creneau = synthese_journaliere.groupby(["Jour_Semaine", "Période"])["Moyenne_Constatee"].transform("mean")
+        synthese_journaliere["Moyenne_Reference"] = synthese_journaliere["Moyenne_3_Semaines_Precedentes"].fillna(moyenne_globale_creneau)
 
-        # Si pas assez d'historique (ex: les premières semaines), on se rabat sur la moyenne générale
-        df_filtre["Moyenne_Reference"] = df_filtre["Moyenne_3_Semaines_Precedentes"].fillna(
-            df_filtre.groupby(["Jour_Semaine", "Période"])[col_y].transform("mean")
-        )
+        # 4. Calcul de l'écart en pourcentage et de la limite haute
+        synthese_journaliere["Limite_Haute"] = synthese_journaliere["Moyenne_Reference"] * (1 + seuil_pct / 100)
+        synthese_journaliere["Ecart_Pct"] = ((synthese_journaliere["Moyenne_Constatee"] - synthese_journaliere["Moyenne_Reference"]) / synthese_journaliere["Moyenne_Reference"]) * 100
 
-        # Calcul de la limite haute
-        df_filtre["Limite_Haute"] = df_filtre["Moyenne_Reference"] * (1 + seuil_pct / 100)
-        df_filtre["Est_Depassement"] = df_filtre[col_y] > df_filtre["Limite_Haute"]
+        # Filtre des dépassements uniquement (Moyenne Constatée > Limite Haute)
+        depassements_synthese = synthese_journaliere[
+            synthese_journaliere["Moyenne_Constatee"] > synthese_journaliere["Limite_Haute"]
+        ].copy()
 
-        # Synthèse des événements de dépassement
-        depassements_synthese = (
-            df_filtre[df_filtre["Est_Depassement"]]
-            .groupby(["Date_Jour", "Jour_Semaine", "Période"])
-            .agg(
-                Valeur_Max=(col_y, "max"),
-                Moyenne_3_Sém_Prec=("Moyenne_Reference", "first"),
-                Nb_Points_Anormaux=(col_y, "count"),
-            )
-            .reset_index()
-        )
-
-        # Affichage des métriques
+        # Metrics
         st.metric(
-            "🔴 Jours / Périodes avec dépassement",
+            "🔴 Périodes (Jour/Nuit) avec dépassement de moyenne",
             f"{len(depassements_synthese)} événement(s)",
         )
 
-        # Tableau des dépassements
+        # Tableau final
         if not depassements_synthese.empty:
             st.warning(
-                f"Événements ayant dépassé de plus de +{seuil_pct}% la moyenne des 3 semaines précédentes (pour le même jour et la même période) :"
+                f"Périodes ayant une moyenne de consommation supérieure de plus de +{seuil_pct}% par rapport à la moyenne des 3 semaines précédentes :"
             )
+            
+            tableau_affichage = depassements_synthese.rename(
+                columns={
+                    "Date_Jour": "Date",
+                    "Jour_Semaine": "Jour",
+                    "Période": "Période",
+                    "Moyenne_Constatee": "Moyenne du Jour (kW)",
+                    "Moyenne_Reference": "Moyenne 3 Semaines Précédentes (kW)",
+                    "Ecart_Pct": "Écart (%)",
+                }
+            )[["Date", "Jour", "Période", "Moyenne du Jour (kW)", "Moyenne 3 Semaines Précédentes (kW)", "Écart (%)"]]
+
             st.dataframe(
-                depassements_synthese.rename(
-                    columns={
-                        "Date_Jour": "Date",
-                        "Jour_Semaine": "Jour",
-                        "Période": "Période concernée",
-                        "Valeur_Max": "Puissance Max Atteinte",
-                        "Moyenne_3_Sém_Prec": "Moyenne 3 Semaines Précédentes",
-                        "Nb_Points_Anormaux": "Nombre de relevés en dépassement",
-                    }
-                ).style.format(
+                tableau_affichage.style.format(
                     {
-                        "Puissance Max Atteinte": "{:.2f}",
-                        "Moyenne 3 Semaines Précédentes": "{:.2f}",
+                        "Moyenne du Jour (kW)": "{:.2f}",
+                        "Moyenne 3 Semaines Précédentes (kW)": "{:.2f}",
+                        "Écart (%)": "+{:.1f}%",
                     }
                 )
             )
         else:
-            st.success("Aucun dépassement détecté par rapport à la moyenne des 3 semaines précédentes.")
+            st.success("Aucune période ne dépasse la moyenne des 3 semaines précédentes au seuil sélectionné.")
