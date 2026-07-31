@@ -131,7 +131,7 @@ if fichier is not None:
             [
                 "📊 Moyennes Globales",
                 "🔴 Dépassements de Moyenne",
-                "🔥 Puissances Max & Durée",
+                "⚡ Dépassements de Puissance Souscrite",
             ]
         )
 
@@ -182,7 +182,7 @@ if fichier is not None:
             st.dataframe(tableau_moyennes.style.format("{:.2f}"))
 
         # -------------------------------------------------------------
-        # ONGLET 2 : DÉTECTION DES DÉPASSEMENTS
+        # ONGLET 2 : DÉTECTION DES DÉPASSEMENTS DE MOYENNE
         # -------------------------------------------------------------
         with tab2:
             st.subheader("Dépassements de la moyenne constatée (vs 3 semaines précédentes)")
@@ -252,12 +252,21 @@ if fichier is not None:
                 st.success("Aucune période ne dépasse la moyenne des 3 semaines précédentes au seuil sélectionné.")
 
         # -------------------------------------------------------------
-        # ONGLET 3 : VALEURS MAXIMALES ET TEMPS PASSÉ
+        # ONGLET 3 : DÉPASSEMENTS DE LA PUISSANCE CONTRACTUELLE
         # -------------------------------------------------------------
         with tab3:
-            st.subheader("Puissances maximales atteintes et temps de fonctionnement")
+            st.subheader("Analyse du dépassement de la puissance souscrite (Contrat)")
 
-            # Estimation automatique du pas de temps
+            # Saisie de la valeur du contrat
+            valeur_max_absolue = df_filtre[col_y].max()
+            puissance_souscrite = st.number_input(
+                "Renseigner la Puissance Souscrite / Contrat (kW)",
+                min_value=0.0,
+                value=float(round(valeur_max_absolue * 0.8, 2)),
+                step=10.0,
+            )
+
+            # Estimation automatique du pas de temps entre deux points
             if len(df_filtre) > 1:
                 pas_de_temps_min = (
                     df_filtre[col_x].diff().median().total_seconds() / 60
@@ -267,11 +276,12 @@ if fichier is not None:
             else:
                 pas_de_temps_min = 10
 
-            valeur_max_absolue = df_filtre[col_y].max()
-            df_max = df_filtre[df_filtre[col_y] == valeur_max_absolue]
-            nb_occurrences = len(df_max)
+            # Filtrage des dépassements de la puissance contractuelle
+            df_depassements_contrat = df_filtre[df_filtre[col_y] > puissance_souscrite].copy()
+            nb_occurrences = len(df_depassements_contrat)
             temps_total_minutes = int(nb_occurrences * pas_de_temps_min)
 
+            # Formatage de la durée
             heures_duree = temps_total_minutes // 60
             minutes_duree = temps_total_minutes % 60
             if heures_duree > 0:
@@ -279,24 +289,51 @@ if fichier is not None:
             else:
                 duree_str = f"{minutes_duree} min"
 
-            col_v1, col_v2, col_v3 = st.columns(3)
-            col_v1.metric("🔥 Puissance Max Absolue", f"{valeur_max_absolue:.2f}")
-            col_v2.metric("⏱️ Temps total à cette puissance", duree_str)
-            col_v3.metric("📊 Nombre d'apparitions (points)", f"{nb_occurrences} relevé(s)")
+            # Indicateurs visuels
+            col_v1, col_v2, col_v3, col_v4 = st.columns(4)
+            col_v1.metric("⏱️ Temps au-dessus du contrat", duree_str)
+            col_v2.metric("📊 Nb de relevés en dépassement", f"{nb_occurrences}")
+            col_v3.metric("🔥 Puissance Max Atteinte", f"{valeur_max_absolue:.2f} kW")
+            
+            ecart_max = valeur_max_absolue - puissance_souscrite
+            if ecart_max > 0:
+                col_v4.metric("📈 Dépassement Max", f"+{ecart_max:.2f} kW")
+            else:
+                col_v4.metric("📈 Dépassement Max", "Aucun")
 
-            st.markdown(f"**Détail des horodatages où la valeur maximale ({valeur_max_absolue:.2f}) a été observée :**")
+            st.markdown("---")
 
-            df_max_detail = df_max[[col_x, "Jour_Semaine", "Période", col_y]].copy()
-            df_max_detail[col_x] = df_max_detail[col_x].dt.strftime("%d/%m/%Y %H:%M")
+            # Affichage du tableau détaillé
+            if not df_depassements_contrat.empty:
+                st.warning(
+                    f"⚠️ Le contrat ({puissance_souscrite:.2f} kW) a été dépassé pendant un cumul de **{duree_str}** sur la période sélectionnée."
+                )
 
-            st.dataframe(
-                df_max_detail.rename(
-                    columns={
-                        col_x: "Horodatage",
-                        "Jour_Semaine": "Jour",
-                        "Période": "Période",
-                        col_y: "Puissance Relevée",
-                    }
-                ).style.format({"Puissance Relevée": "{:.2f}"}),
-                use_container_width=True,
-            )
+                df_depassements_contrat["Dépassement (kW)"] = df_depassements_contrat[col_y] - puissance_souscrite
+                df_depassements_contrat["Dépassement (%)"] = (df_depassements_contrat["Dépassement (kW)"] / puissance_souscrite) * 100
+
+                df_depassement_detail = df_depassements_contrat[
+                    [col_x, "Jour_Semaine", "Période", col_y, "Dépassement (kW)", "Dépassement (%)"]
+                ].copy()
+
+                df_depassement_detail[col_x] = df_depassement_detail[col_x].dt.strftime("%d/%m/%Y %H:%M")
+
+                st.dataframe(
+                    df_depassement_detail.rename(
+                        columns={
+                            col_x: "Horodatage",
+                            "Jour_Semaine": "Jour",
+                            "Période": "Période",
+                            col_y: "Puissance Relevée (kW)",
+                        }
+                    ).style.format(
+                        {
+                            "Puissance Relevée (kW)": "{:.2f}",
+                            "Dépassement (kW)": "+{:.2f}",
+                            "Dépassement (%)": "+{:.1f}%",
+                        }
+                    ),
+                    use_container_width=True,
+                )
+            else:
+                st.success(f"✅ Aucun dépassement de la puissance souscrite ({puissance_souscrite:.2f} kW) sur la période sélectionnée.")
