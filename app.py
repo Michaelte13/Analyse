@@ -130,7 +130,7 @@ if fichier is not None:
         tab1, tab2, tab3 = st.tabs(
             [
                 "📊 Moyennes Globales",
-                "🔴 Dépassements de Moyenne",
+                "🔴 Dépassements vs 3 Semaines Précédentes",
                 "⚡ Dépassements de Puissance Souscrite",
             ]
         )
@@ -182,49 +182,58 @@ if fichier is not None:
             st.dataframe(tableau_moyennes.style.format("{:.2f}"))
 
         # -------------------------------------------------------------
-        # ONGLET 2 : DÉTECTION DES DÉPASSEMENTS DE MOYENNE
+        # ONGLET 2 : COMPARAISON AUX 3 SEMAINES PRÉCÉDENTES (+ SEUIL %)
         # -------------------------------------------------------------
         with tab2:
-            st.subheader("Dépassements de la moyenne constatée (vs 3 semaines précédentes)")
+            st.subheader("Comparaison directe aux 3 mêmes jours des semaines précédentes")
 
+            # Curseur de réglage du seuil de tolérance (%)
             seuil_pct = st.slider(
-                "Seuil de dépassement de la moyenne (%)",
-                min_value=5,
+                "Seuil de dépassement (%)",
+                min_value=0,
                 max_value=100,
                 value=20,
                 step=5,
+                help="Alerte uniquement si la consommation dépasse de plus de X% l'un des 3 mêmes jours passés.",
             )
 
+            facteur_seuil = 1 + (seuil_pct / 100.0)
+
+            # Synthèse journalière par période
             synthese_journaliere = (
                 df_filtre.groupby(["Date_Jour", "Jour_Semaine", "Période"])[col_y]
                 .mean()
                 .reset_index()
-                .rename(columns={col_y: "Moyenne_Constatee"})
+                .rename(columns={col_y: "Consommation_Jour"})
                 .sort_values("Date_Jour")
             )
 
-            synthese_journaliere["Moyenne_3_Semaines_Precedentes"] = (
-                synthese_journaliere.groupby(["Jour_Semaine", "Période"])["Moyenne_Constatee"]
-                .transform(lambda x: x.shift(1).rolling(window=3, min_periods=1).mean())
+            # Récupération des valeurs individuelles des 3 semaines précédentes
+            synthese_journaliere["Conso_S-1"] = synthese_journaliere.groupby(
+                ["Jour_Semaine", "Période"]
+            )["Consommation_Jour"].shift(1)
+
+            synthese_journaliere["Conso_S-2"] = synthese_journaliere.groupby(
+                ["Jour_Semaine", "Période"]
+            )["Consommation_Jour"].shift(2)
+
+            synthese_journaliere["Conso_S-3"] = synthese_journaliere.groupby(
+                ["Jour_Semaine", "Période"]
+            )["Consommation_Jour"].shift(3)
+
+            # Vérification avec prise en compte du seuil (%)
+            condition_depassement = (
+                (synthese_journaliere["Consommation_Jour"] > synthese_journaliere["Conso_S-1"] * facteur_seuil)
+                | (synthese_journaliere["Consommation_Jour"] > synthese_journaliere["Conso_S-2"] * facteur_seuil)
+                | (synthese_journaliere["Consommation_Jour"] > synthese_journaliere["Conso_S-3"] * facteur_seuil)
             )
 
-            moyenne_globale_creneau = synthese_journaliere.groupby(["Jour_Semaine", "Période"])["Moyenne_Constatee"].transform("mean")
-            synthese_journaliere["Moyenne_Reference"] = synthese_journaliere["Moyenne_3_Semaines_Precedentes"].fillna(moyenne_globale_creneau)
-
-            synthese_journaliere["Limite_Haute"] = synthese_journaliere["Moyenne_Reference"] * (1 + seuil_pct / 100)
-            synthese_journaliere["Ecart_Pct"] = ((synthese_journaliere["Moyenne_Constatee"] - synthese_journaliere["Moyenne_Reference"]) / synthese_journaliere["Moyenne_Reference"]) * 100
-
-            depassements_synthese = synthese_journaliere[
-                synthese_journaliere["Moyenne_Constatee"] > synthese_journaliere["Limite_Haute"]
-            ].copy()
+            depassements_synthese = synthese_journaliere[condition_depassement].copy()
 
             if not depassements_synthese.empty:
                 st.metric(
-                    "🔴 Périodes (Jour/Nuit) avec dépassement de moyenne",
+                    f"🔴 Périodes supérieures de +{seuil_pct}% à au moins 1 des 3 semaines précédentes",
                     f"{len(depassements_synthese)} événement(s)",
-                )
-                st.warning(
-                    f"Périodes ayant une moyenne de consommation supérieure de plus de +{seuil_pct}% par rapport à la moyenne des 3 semaines précédentes :"
                 )
 
                 tableau_affichage = depassements_synthese.rename(
@@ -232,20 +241,33 @@ if fichier is not None:
                         "Date_Jour": "Date",
                         "Jour_Semaine": "Jour",
                         "Période": "Période",
-                        "Moyenne_Constatee": "Moyenne du Jour (kW)",
-                        "Moyenne_Reference": "Moyenne 3 Semaines Précédentes (kW)",
-                        "Ecart_Pct": "Écart (%)",
+                        "Consommation_Jour": "Conso Journée (kW)",
+                        "Conso_S-1": "Semaine S-1 (kW)",
+                        "Conso_S-2": "Semaine S-2 (kW)",
+                        "Conso_S-3": "Semaine S-3 (kW)",
                     }
-                )[["Date", "Jour", "Période", "Moyenne du Jour (kW)", "Moyenne 3 Semaines Précédentes (kW)", "Écart (%)"]]
+                )[
+                    [
+                        "Date",
+                        "Jour",
+                        "Période",
+                        "Conso Journée (kW)",
+                        "Semaine S-1 (kW)",
+                        "Semaine S-2 (kW)",
+                        "Semaine S-3 (kW)",
+                    ]
+                ]
 
                 st.dataframe(
                     tableau_affichage.style.format(
                         {
-                            "Moyenne du Jour (kW)": "{:.2f}",
-                            "Moyenne 3 Semaines Précédentes (kW)": "{:.2f}",
-                            "Écart (%)": "+{:.1f}%",
+                            "Conso Journée (kW)": "{:.2f}",
+                            "Semaine S-1 (kW)": lambda x: f"{x:.2f}" if pd.notnull(x) else "-",
+                            "Semaine S-2 (kW)": lambda x: f"{x:.2f}" if pd.notnull(x) else "-",
+                            "Semaine S-3 (kW)": lambda x: f"{x:.2f}" if pd.notnull(x) else "-",
                         }
-                    )
+                    ),
+                    use_container_width=True,
                 )
             else:
                 st.success("Pas de dépassement")
@@ -294,7 +316,7 @@ if fichier is not None:
                 col_v1.metric("⏱️ Temps au-dessus du contrat", duree_str)
                 col_v2.metric("📊 Nb de relevés en dépassement", f"{nb_occurrences}")
                 col_v3.metric("🔥 Puissance Max Atteinte", f"{valeur_max_absolue:.2f} kW")
-                
+
                 ecart_max = valeur_max_absolue - puissance_souscrite
                 col_v4.metric("📈 Dépassement Max", f"+{ecart_max:.2f} kW")
 
