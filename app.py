@@ -71,7 +71,6 @@ if fichier is not None:
         "10 - Octobre",
         "11 - Novembre",
         "12 - Décembre",
-        "--- Personnalisé ---",
         "✏️ Plage de dates",
     ]
 
@@ -98,7 +97,7 @@ if fichier is not None:
     }
 
     # Application de la logique de filtrage
-    if choix_filtre in ["--- Saisons ---", "--- Mois ---", "--- Personnalisé ---", "Toutes les données"]:
+    if choix_filtre in ["--- Saisons ---", "--- Mois ---", "Toutes les données"]:
         df_filtre = df.copy()
 
     elif choix_filtre == "❄️ Hiver":
