@@ -55,8 +55,9 @@ if fichier is not None:
         "Toutes les données",
         "--- Saisons ---",
         "❄️ Hiver",
+        "🌸 Printemps",
         "☀️ Été",
-        "🍂 Mi-saison",
+        "🍂 Automne",
         "--- Mois ---",
         "01 - Janvier",
         "02 - Février",
@@ -101,13 +102,16 @@ if fichier is not None:
         df_filtre = df.copy()
 
     elif choix_filtre == "❄️ Hiver":
-        df_filtre = df[df[col_x].dt.month.isin([12, 1, 2, 3])].copy()
+        df_filtre = df[df[col_x].dt.month.isin([12, 1, 2])].copy()
+
+    elif choix_filtre == "🌸 Printemps":
+        df_filtre = df[df[col_x].dt.month.isin([3, 4, 5])].copy()
 
     elif choix_filtre == "☀️ Été":
         df_filtre = df[df[col_x].dt.month.isin([6, 7, 8])].copy()
 
-    elif choix_filtre == "🍂 Mi-saison":
-        df_filtre = df[df[col_x].dt.month.isin([4, 5, 9, 10, 11])].copy()
+    elif choix_filtre == "🍂 Automne":
+        df_filtre = df[df[col_x].dt.month.isin([9, 10, 11])].copy()
 
     elif choix_filtre in mois_dict:
         mois_num = mois_dict[choix_filtre]
