@@ -39,7 +39,7 @@ if fichier is not None:
     # Conversion en Datetime
     df = donnees.copy()
     df[col_x] = pd.to_datetime(df[col_x], errors="coerce")
-    df = df.dropna(subset=[col_x])
+    df = df.dropna(subset=[col_x]).sort_values(col_x)
 
     # -------------------------------------------------------------
     # FILTRE PAR MOIS / SAISON / PERIODE (MENU DÉROULANT)
@@ -181,7 +181,7 @@ if fichier is not None:
             lambda x: jours_fr[x] if pd.notnull(x) else None
         )
 
-        # Affichage du graphique récapitulatif global
+        # Graphique des moyennes
         tableau_moyennes = (
             df_filtre.groupby(["Jour_Semaine", "Période"])[col_y]
             .mean()
@@ -193,7 +193,7 @@ if fichier is not None:
         st.markdown("---")
 
         # -------------------------------------------------------------
-        # 2. DÉTECTION DES DÉPASSEMENTS (MOYENNE DU JOUR vs MOYENNE DES 3 SEMAINES PRÉCÉDENTES)
+        # 2. DÉTECTION DES DÉPASSEMENTS (vs 3 SEMAINES PRÉCÉDENTES)
         # -------------------------------------------------------------
         st.subheader("2. Dépassements de la moyenne constatée (vs 3 semaines précédentes)")
 
@@ -205,7 +205,7 @@ if fichier is not None:
             step=5,
         )
 
-        # 1. Calcul de la MOYENNE EFFECTIVE pour chaque créneau (Date, Jour, Période)
+        # Synthese journaliere
         synthese_journaliere = (
             df_filtre.groupby(["Date_Jour", "Jour_Semaine", "Période"])[col_y]
             .mean()
@@ -214,33 +214,26 @@ if fichier is not None:
             .sort_values("Date_Jour")
         )
 
-        # 2. Calcul de la moyenne glissante des 3 semaines précédentes
-        # Pour chaque (Jour_Semaine, Période), on calcule la moyenne des 3 occurrences passées
         synthese_journaliere["Moyenne_3_Semaines_Precedentes"] = (
             synthese_journaliere.groupby(["Jour_Semaine", "Période"])["Moyenne_Constatee"]
             .transform(lambda x: x.shift(1).rolling(window=3, min_periods=1).mean())
         )
 
-        # 3. Repli sur la moyenne globale du jour si pas assez d'historique (ex: début de fichier)
         moyenne_globale_creneau = synthese_journaliere.groupby(["Jour_Semaine", "Période"])["Moyenne_Constatee"].transform("mean")
         synthese_journaliere["Moyenne_Reference"] = synthese_journaliere["Moyenne_3_Semaines_Precedentes"].fillna(moyenne_globale_creneau)
 
-        # 4. Calcul de l'écart en pourcentage et de la limite haute
         synthese_journaliere["Limite_Haute"] = synthese_journaliere["Moyenne_Reference"] * (1 + seuil_pct / 100)
         synthese_journaliere["Ecart_Pct"] = ((synthese_journaliere["Moyenne_Constatee"] - synthese_journaliere["Moyenne_Reference"]) / synthese_journaliere["Moyenne_Reference"]) * 100
 
-        # Filtre des dépassements uniquement (Moyenne Constatée > Limite Haute)
         depassements_synthese = synthese_journaliere[
             synthese_journaliere["Moyenne_Constatee"] > synthese_journaliere["Limite_Haute"]
         ].copy()
 
-        # Metrics
         st.metric(
             "🔴 Périodes (Jour/Nuit) avec dépassement de moyenne",
             f"{len(depassements_synthese)} événement(s)",
         )
 
-        # Tableau final
         if not depassements_synthese.empty:
             st.warning(
                 f"Périodes ayant une moyenne de consommation supérieure de plus de +{seuil_pct}% par rapport à la moyenne des 3 semaines précédentes :"
@@ -268,3 +261,60 @@ if fichier is not None:
             )
         else:
             st.success("Aucune période ne dépasse la moyenne des 3 semaines précédentes au seuil sélectionné.")
+
+        st.markdown("---")
+
+        # -------------------------------------------------------------
+        # 3. VALEURS MAXIMALES ATTEINTES ET TEMPS PASSÉ
+        # -------------------------------------------------------------
+        st.subheader("3. Puissances maximales atteintes et temps de fonctionnement")
+
+        # Estimation automatique du pas de temps (en minutes) entre deux relevés
+        if len(df_filtre) > 1:
+            pas_de_temps_min = (
+                df_filtre[col_x].diff().median().total_seconds() / 60
+            )
+            if pd.isna(pas_de_temps_min) or pas_de_temps_min <= 0:
+                pas_de_temps_min = 10  # Valeur par défaut si indéterminée
+        else:
+            pas_de_temps_min = 10
+
+        # Récupération des N plus hautes puissances distinctes ou de la valeur max absolue
+        valeur_max_absolue = df_filtre[col_y].max()
+
+        # Groupe par valeur maximale
+        df_max = df_filtre[df_filtre[col_y] == valeur_max_absolue]
+        nb_occurrences = len(df_max)
+        temps_total_minutes = int(nb_occurrences * pas_de_temps_min)
+
+        # Formatage lisible de la durée
+        heures_duree = temps_total_minutes // 60
+        minutes_duree = temps_total_minutes % 60
+        if heures_duree > 0:
+            duree_str = f"{heures_duree}h {minutes_duree}min"
+        else:
+            duree_str = f"{minutes_duree} min"
+
+        # Métriques clés
+        col_v1, col_v2, col_v3 = st.columns(3)
+        col_v1.metric("🔥 Puissance Max Absolue", f"{valeur_max_absolue:.2f}")
+        col_v2.metric("⏱️ Temps total à cette puissance", duree_str)
+        col_v3.metric("📊 Nombre d'apparitions (points)", f"{nb_occurrences} relevé(s)")
+
+        # Tableau détaillé des dates où la puissance maximale est atteinte
+        st.markdown(f"**Détail des horodatages où la valeur maximale ({valeur_max_absolue:.2f}) a été observée :**")
+
+        df_max_detail = df_max[[col_x, "Jour_Semaine", "Période", col_y]].copy()
+        df_max_detail[col_x] = df_max_detail[col_x].dt.strftime("%d/%m/%Y %H:%M")
+
+        st.dataframe(
+            df_max_detail.rename(
+                columns={
+                    col_x: "Horodatage",
+                    "Jour_Semaine": "Jour",
+                    "Période": "Période",
+                    col_y: "Puissance Relevée",
+                }
+            ).style.format({"Puissance Relevée": "{:.2f}"}),
+            use_container_width=True,
+        )
