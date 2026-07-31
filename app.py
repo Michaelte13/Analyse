@@ -22,19 +22,9 @@ if fichier is not None:
     donnees = charger_donnees(fichier)
     st.success("Fichier chargé avec succès !")
 
-    # Sélection des colonnes dans la barre latérale
-    colonnes_toutes = list(donnees.columns)
-    colonnes_numeriques = list(
-        donnees.select_dtypes(include=["number"]).columns
-    )
-
-    st.sidebar.header("⚙️ Paramètres des colonnes")
-    col_x = st.sidebar.selectbox(
-        "Colonne Date / Heure", colonnes_toutes, index=0
-    )
-    col_y = st.sidebar.selectbox(
-        "Colonne Puissance (kW/MW)", colonnes_numeriques, index=0
-    )
+    # Sélection automatique de la 1ère colonne (Date) et de la 2ème colonne (Puissance)
+    col_x = donnees.columns[0]
+    col_y = donnees.columns[1]
 
     # Conversion en Datetime
     df = donnees.copy()
@@ -44,7 +34,6 @@ if fichier is not None:
     # -------------------------------------------------------------
     # FILTRE PAR MOIS / SAISON / PERIODE (MENU DÉROULANT)
     # -------------------------------------------------------------
-    st.sidebar.markdown("---")
     st.sidebar.header("📅 Filtre Temporel")
 
     date_min = df[col_x].min().date()
@@ -238,7 +227,7 @@ if fichier is not None:
                 st.warning(
                     f"Périodes ayant une moyenne de consommation supérieure de plus de +{seuil_pct}% par rapport à la moyenne des 3 semaines précédentes :"
                 )
-                
+
                 tableau_affichage = depassements_synthese.rename(
                     columns={
                         "Date_Jour": "Date",
