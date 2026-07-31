@@ -26,18 +26,74 @@ if fichier is not None:
     col_x = donnees.columns[0]
     col_y = donnees.columns[1]
 
-    # Conversion en Datetime
-    df = donnees.copy()
-    df[col_x] = pd.to_datetime(df[col_x], errors="coerce")
-    df = df.dropna(subset=[col_x]).sort_values(col_x)
+    # Conversion en Datetime et tri sur le dataframe GLOBAL
+    df_global = donnees.copy()
+    df_global[col_x] = pd.to_datetime(df_global[col_x], errors="coerce")
+    df_global = df_global.dropna(subset=[col_x]).sort_values(col_x)
+
+    # -------------------------------------------------------------
+    # CONFIGURATION DES PLAGES HORAIRES ET JOURS (GLOBAL)
+    # -------------------------------------------------------------
+    st.sidebar.header("🕒 Plages Horaires Jour/Nuit")
+    heure_debut_jour = st.sidebar.number_input(
+        "Début de journée (Heure)", min_value=0, max_value=23, value=6
+    )
+    heure_fin_jour = st.sidebar.number_input(
+        "Fin de journée (Heure)", min_value=0, max_value=23, value=22
+    )
+
+    heures = df_global[col_x].dt.hour
+    est_jour = (heures >= heure_debut_jour) & (heures < heure_fin_jour)
+    df_global["Période"] = "🌙 Nuit"
+    df_global.loc[est_jour, "Période"] = "☀️ Jour"
+
+    df_global["Date_Jour"] = df_global[col_x].dt.date
+
+    jours_fr = [
+        "1. Lundi",
+        "2. Mardi",
+        "3. Mercredi",
+        "4. Jeudi",
+        "5. Vendredi",
+        "6. Samedi",
+        "7. Dimanche",
+    ]
+    df_global["Jour_Semaine"] = df_global[col_x].dt.dayofweek.map(
+        lambda x: jours_fr[x] if pd.notnull(x) else None
+    )
+
+    # -------------------------------------------------------------
+    # CALCUL SUR L'ENSEMBLE DES DONNÉES (POUR S-1, S-2, S-3 HORS MOIS)
+    # -------------------------------------------------------------
+    synthese_global = (
+        df_global.groupby(["Date_Jour", "Jour_Semaine", "Période"])[col_y]
+        .mean()
+        .reset_index()
+        .rename(columns={col_y: "Consommation_Jour"})
+        .sort_values("Date_Jour")
+    )
+
+    # Décalages sur l'historique complet
+    synthese_global["Conso_S-1"] = synthese_global.groupby(
+        ["Jour_Semaine", "Période"]
+    )["Consommation_Jour"].shift(1)
+
+    synthese_global["Conso_S-2"] = synthese_global.groupby(
+        ["Jour_Semaine", "Période"]
+    )["Consommation_Jour"].shift(2)
+
+    synthese_global["Conso_S-3"] = synthese_global.groupby(
+        ["Jour_Semaine", "Période"]
+    )["Consommation_Jour"].shift(3)
 
     # -------------------------------------------------------------
     # FILTRE PAR MOIS / SAISON / PERIODE (MENU DÉROULANT)
     # -------------------------------------------------------------
+    st.sidebar.markdown("---")
     st.sidebar.header("📅 Filtre Temporel")
 
-    date_min = df[col_x].min().date()
-    date_max = df[col_x].max().date()
+    date_min = df_global[col_x].min().date()
+    date_max = df_global[col_x].max().date()
 
     options_filtre = [
         "Toutes les données",
@@ -61,7 +117,7 @@ if fichier is not None:
     ]
 
     choix_filtre = st.sidebar.selectbox(
-        "Sélectionner la période :",
+        "Sélectionner la période d'analyse :",
         options_filtre,
         index=0,
     )
@@ -82,23 +138,23 @@ if fichier is not None:
     }
 
     if choix_filtre == "Toutes les données":
-        df_filtre = df.copy()
+        dates_filtrees = df_global[col_x].dt.date.unique()
 
     elif choix_filtre == "❄️ Hiver":
-        df_filtre = df[df[col_x].dt.month.isin([12, 1, 2])].copy()
+        dates_filtrees = df_global[df_global[col_x].dt.month.isin([12, 1, 2])][col_x].dt.date.unique()
 
     elif choix_filtre == "🌸 Printemps":
-        df_filtre = df[df[col_x].dt.month.isin([3, 4, 5])].copy()
+        dates_filtrees = df_global[df_global[col_x].dt.month.isin([3, 4, 5])][col_x].dt.date.unique()
 
     elif choix_filtre == "☀️ Été":
-        df_filtre = df[df[col_x].dt.month.isin([6, 7, 8])].copy()
+        dates_filtrees = df_global[df_global[col_x].dt.month.isin([6, 7, 8])][col_x].dt.date.unique()
 
     elif choix_filtre == "🍂 Automne":
-        df_filtre = df[df[col_x].dt.month.isin([9, 10, 11])].copy()
+        dates_filtrees = df_global[df_global[col_x].dt.month.isin([9, 10, 11])][col_x].dt.date.unique()
 
     elif choix_filtre in mois_dict:
         mois_num = mois_dict[choix_filtre]
-        df_filtre = df[df[col_x].dt.month == mois_num].copy()
+        dates_filtrees = df_global[df_global[col_x].dt.month == mois_num][col_x].dt.date.unique()
 
     elif choix_filtre == "✏️ Plage de dates":
         plage_dates = st.sidebar.date_input(
@@ -109,12 +165,16 @@ if fichier is not None:
         )
         if isinstance(plage_dates, tuple) and len(plage_dates) == 2:
             start_date, end_date = plage_dates
-            df_filtre = df[
-                (df[col_x].dt.date >= start_date)
-                & (df[col_x].dt.date <= end_date)
-            ].copy()
+            dates_filtrees = df_global[
+                (df_global[col_x].dt.date >= start_date)
+                & (df_global[col_x].dt.date <= end_date)
+            ][col_x].dt.date.unique()
         else:
-            df_filtre = df.copy()
+            dates_filtrees = df_global[col_x].dt.date.unique()
+
+    # Application du filtre d'affichage
+    df_filtre = df_global[df_global["Date_Jour"].isin(dates_filtrees)].copy()
+    synthese_filtree = synthese_global[synthese_global["Date_Jour"].isin(dates_filtrees)].copy()
 
     # -------------------------------------------------------------
     # AFFICHAGE DES RÉSULTATS DANS DES ONGLETS
@@ -126,45 +186,12 @@ if fichier is not None:
             f"📍 **Analyse du {df_filtre[col_x].min().strftime('%d/%m/%Y')} au {df_filtre[col_x].max().strftime('%d/%m/%Y')}**"
         )
 
-        # Création des 3 onglets
         tab1, tab2, tab3 = st.tabs(
             [
                 "📊 Moyennes Globales",
                 "🔴 Dépassements vs 3 Semaines Précédentes",
                 "⚡ Dépassements de Puissance Souscrite",
             ]
-        )
-
-        # -------------------------------------------------------------
-        # PRÉPARATION COMMUNE DES DONNÉES (JOUR / NUIT & JOUR SEMAINE)
-        # -------------------------------------------------------------
-        st.sidebar.markdown("---")
-        st.sidebar.header("🕒 Plages Horaires Jour/Nuit")
-        heure_debut_jour = st.sidebar.number_input(
-            "Début de journée (Heure)", min_value=0, max_value=23, value=6
-        )
-        heure_fin_jour = st.sidebar.number_input(
-            "Fin de journée (Heure)", min_value=0, max_value=23, value=22
-        )
-
-        heures = df_filtre[col_x].dt.hour
-        est_jour = (heures >= heure_debut_jour) & (heures < heure_fin_jour)
-        df_filtre["Période"] = "🌙 Nuit"
-        df_filtre.loc[est_jour, "Période"] = "☀️ Jour"
-
-        df_filtre["Date_Jour"] = df_filtre[col_x].dt.date
-
-        jours_fr = [
-            "1. Lundi",
-            "2. Mardi",
-            "3. Mercredi",
-            "4. Jeudi",
-            "5. Vendredi",
-            "6. Samedi",
-            "7. Dimanche",
-        ]
-        df_filtre["Jour_Semaine"] = df_filtre[col_x].dt.dayofweek.map(
-            lambda x: jours_fr[x] if pd.notnull(x) else None
         )
 
         # -------------------------------------------------------------
@@ -187,7 +214,6 @@ if fichier is not None:
         with tab2:
             st.subheader("Comparaison directe aux 3 mêmes jours des semaines précédentes")
 
-            # Curseur de réglage du seuil de tolérance (%)
             seuil_pct = st.slider(
                 "Seuil de dépassement (%)",
                 min_value=0,
@@ -199,36 +225,14 @@ if fichier is not None:
 
             facteur_seuil = 1 + (seuil_pct / 100.0)
 
-            # Synthèse journalière par période
-            synthese_journaliere = (
-                df_filtre.groupby(["Date_Jour", "Jour_Semaine", "Période"])[col_y]
-                .mean()
-                .reset_index()
-                .rename(columns={col_y: "Consommation_Jour"})
-                .sort_values("Date_Jour")
-            )
-
-            # Récupération des valeurs individuelles des 3 semaines précédentes
-            synthese_journaliere["Conso_S-1"] = synthese_journaliere.groupby(
-                ["Jour_Semaine", "Période"]
-            )["Consommation_Jour"].shift(1)
-
-            synthese_journaliere["Conso_S-2"] = synthese_journaliere.groupby(
-                ["Jour_Semaine", "Période"]
-            )["Consommation_Jour"].shift(2)
-
-            synthese_journaliere["Conso_S-3"] = synthese_journaliere.groupby(
-                ["Jour_Semaine", "Période"]
-            )["Consommation_Jour"].shift(3)
-
             # Vérification avec prise en compte du seuil (%)
             condition_depassement = (
-                (synthese_journaliere["Consommation_Jour"] > synthese_journaliere["Conso_S-1"] * facteur_seuil)
-                | (synthese_journaliere["Consommation_Jour"] > synthese_journaliere["Conso_S-2"] * facteur_seuil)
-                | (synthese_journaliere["Consommation_Jour"] > synthese_journaliere["Conso_S-3"] * facteur_seuil)
+                (synthese_filtree["Consommation_Jour"] > synthese_filtree["Conso_S-1"] * facteur_seuil)
+                | (synthese_filtree["Consommation_Jour"] > synthese_filtree["Conso_S-2"] * facteur_seuil)
+                | (synthese_filtree["Consommation_Jour"] > synthese_filtree["Conso_S-3"] * facteur_seuil)
             )
 
-            depassements_synthese = synthese_journaliere[condition_depassement].copy()
+            depassements_synthese = synthese_filtree[condition_depassement].copy()
 
             if not depassements_synthese.empty:
                 st.metric(
@@ -278,7 +282,6 @@ if fichier is not None:
         with tab3:
             st.subheader("Analyse du dépassement de la puissance souscrite (Contrat)")
 
-            # Saisie de la valeur du contrat
             valeur_max_absolue = df_filtre[col_y].max()
             puissance_souscrite = st.number_input(
                 "Renseigner la Puissance Souscrite / Contrat (kW)",
@@ -297,12 +300,10 @@ if fichier is not None:
             else:
                 pas_de_temps_min = 10
 
-            # Filtrage des dépassements de la puissance contractuelle
             df_depassements_contrat = df_filtre[df_filtre[col_y] > puissance_souscrite].copy()
             nb_occurrences = len(df_depassements_contrat)
             temps_total_minutes = int(nb_occurrences * pas_de_temps_min)
 
-            # Formatage de la durée
             heures_duree = temps_total_minutes // 60
             minutes_duree = temps_total_minutes % 60
             if heures_duree > 0:
@@ -310,7 +311,6 @@ if fichier is not None:
             else:
                 duree_str = f"{minutes_duree} min"
 
-            # Affichage selon qu'il y ait dépassement ou non
             if not df_depassements_contrat.empty:
                 col_v1, col_v2, col_v3, col_v4 = st.columns(4)
                 col_v1.metric("⏱️ Temps au-dessus du contrat", duree_str)
