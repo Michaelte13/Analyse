@@ -50,7 +50,6 @@ if fichier is not None:
     date_min = df[col_x].min().date()
     date_max = df[col_x].max().date()
 
-    # Définition des options pour le menu déroulant
     options_filtre = [
         "Toutes les données",
         "--- Saisons ---",
@@ -80,7 +79,6 @@ if fichier is not None:
         index=0,
     )
 
-    # Dictionnaire de correspondance Mois -> Numéro de mois
     mois_dict = {
         "01 - Janvier": 1,
         "02 - Février": 2,
@@ -96,7 +94,6 @@ if fichier is not None:
         "12 - Décembre": 12,
     }
 
-    # Application de la logique de filtrage
     if choix_filtre in ["--- Saisons ---", "--- Mois ---", "Toutes les données"]:
         df_filtre = df.copy()
 
@@ -169,10 +166,7 @@ if fichier is not None:
         df_filtre["Période"] = "🌙 Nuit"
         df_filtre.loc[est_jour, "Période"] = "☀️ Jour"
 
-        # Clés temporelles
         df_filtre["Date_Jour"] = df_filtre[col_x].dt.date
-        df_filtre["Annee"] = df_filtre[col_x].dt.isocalendar().year
-        df_filtre["Semaine"] = df_filtre[col_x].dt.isocalendar().week
 
         jours_fr = [
             "1. Lundi",
@@ -187,7 +181,7 @@ if fichier is not None:
             lambda x: jours_fr[x] if pd.notnull(x) else None
         )
 
-        # Graphique et Tableau des moyennes globales
+        # Affichage du graphique récapitulatif global
         tableau_moyennes = (
             df_filtre.groupby(["Jour_Semaine", "Période"])[col_y]
             .mean()
@@ -199,78 +193,71 @@ if fichier is not None:
         st.markdown("---")
 
         # -------------------------------------------------------------
-        # 2. DÉTECTION DES DÉPASSEMENTS (RÉFÉRENCE : SEMAINE PRÉCÉDENTE N-1)
+        # 2. DÉTECTION DES DÉPASSEMENTS (RÉFÉRENCE : MOYENNE DES 3 SEMAINES PRÉCÉDENTES)
         # -------------------------------------------------------------
-        st.subheader("2. Dépassements de consommation (Comparaison Jour vs Jour et Nuit vs Nuit N-1)")
+        st.subheader("2. Dépassements de consommation (Comparaison vs Moyenne des 3 semaines précédentes)")
 
         seuil_pct = st.slider(
-            "Seuil de dépassement par rapport à la semaine précédente (%)",
+            "Seuil de dépassement par rapport aux 3 semaines précédentes (%)",
             min_value=5,
             max_value=100,
             value=20,
             step=5,
         )
 
-        # Calcul des moyennes hebdomadaires séparées pour chaque [Année, Semaine, Jour, Période (Jour/Nuit)]
-        moyennes_hebdo = (
-            df_filtre.groupby(["Annee", "Semaine", "Jour_Semaine", "Période"])[col_y]
+        # Calcul de la moyenne sur 3 semaines glissantes par [Jour_Semaine, Période]
+        # On regroupe d'abord par (Jour de la semaine, Période, Date exacte)
+        moyennes_journalieres = (
+            df_filtre.groupby(["Date_Jour", "Jour_Semaine", "Période"])[col_y]
             .mean()
             .reset_index()
-            .rename(columns={col_y: "Moyenne_Semaine"})
+            .sort_values("Date_Jour")
         )
 
-        # Calcul de la correspondance vers la semaine N+1
-        moyennes_hebdo["Date_Repere"] = pd.to_datetime(
-            moyennes_hebdo["Annee"].astype(str) + "-W" + moyennes_hebdo["Semaine"].astype(str) + "-1",
-            format="%G-W%V-%u"
+        # Calcul de la moyenne glissante sur les 3 occurrences précédentes du même (Jour_Semaine, Période)
+        moyennes_journalieres["Moyenne_3_Semaines_Precedentes"] = (
+            moyennes_journalieres.groupby(["Jour_Semaine", "Période"])[col_y]
+            .transform(lambda x: x.shift(1).rolling(window=3, min_periods=1).mean())
         )
-        moyennes_hebdo["Date_Semaine_Suivante"] = moyennes_hebdo["Date_Repere"] + pd.Timedelta(weeks=1)
-        
-        moyennes_hebdo["Annee_Suivante"] = moyennes_hebdo["Date_Semaine_Suivante"].dt.isocalendar().year
-        moyennes_hebdo["Semaine_Suivante"] = moyennes_hebdo["Date_Semaine_Suivante"].dt.isocalendar().week
 
-        # Fusion : associe pour la même Période (Jour/Nuit) la moyenne correspondante de la semaine N-1
+        # Fusion des références dans le dataframe d'origine
         df_filtre = df_filtre.merge(
-            moyennes_hebdo[["Annee_Suivante", "Semaine_Suivante", "Jour_Semaine", "Période", "Moyenne_Semaine"]],
-            left_on=["Annee", "Semaine", "Jour_Semaine", "Période"],
-            right_on=["Annee_Suivante", "Semaine_Suivante", "Jour_Semaine", "Période"],
+            moyennes_journalieres[["Date_Jour", "Période", "Moyenne_3_Semaines_Precedentes"]],
+            on=["Date_Jour", "Période"],
             how="left"
-        ).rename(columns={"Moyenne_Semaine": "Moyenne_Semaine_Precedente"})
+        )
 
-        # Nettoyage
-        df_filtre.drop(columns=["Annee_Suivante", "Semaine_Suivante"], errors="ignore", inplace=True)
-
-        # Repli sur la moyenne globale si la semaine précédente n'existe pas dans le fichier
-        df_filtre["Moyenne_Reference"] = df_filtre["Moyenne_Semaine_Precedente"].fillna(
+        # Si pas assez d'historique (ex: les premières semaines), on se rabat sur la moyenne générale
+        df_filtre["Moyenne_Reference"] = df_filtre["Moyenne_3_Semaines_Precedentes"].fillna(
             df_filtre.groupby(["Jour_Semaine", "Période"])[col_y].transform("mean")
         )
 
-        # Limite haute pour le calcul du dépassement
+        # Calcul de la limite haute
         df_filtre["Limite_Haute"] = df_filtre["Moyenne_Reference"] * (1 + seuil_pct / 100)
         df_filtre["Est_Depassement"] = df_filtre[col_y] > df_filtre["Limite_Haute"]
 
-        # Synthèse groupée par Date, Jour et Période (Jour/Nuit)
+        # Synthèse des événements de dépassement
         depassements_synthese = (
             df_filtre[df_filtre["Est_Depassement"]]
             .groupby(["Date_Jour", "Jour_Semaine", "Période"])
             .agg(
                 Valeur_Max=(col_y, "max"),
-                Moyenne_N_1=("Moyenne_Reference", "first"),
+                Moyenne_3_Sém_Prec=("Moyenne_Reference", "first"),
                 Nb_Points_Anormaux=(col_y, "count"),
             )
             .reset_index()
         )
 
-        # Affichage du nombre de dépassements
+        # Affichage des métriques
         st.metric(
             "🔴 Jours / Périodes avec dépassement",
             f"{len(depassements_synthese)} événement(s)",
         )
 
-        # Tableau final
+        # Tableau des dépassements
         if not depassements_synthese.empty:
             st.warning(
-                f"Événements ayant dépassé de plus de +{seuil_pct}% la moyenne de la même période (Jour/Nuit) de la semaine précédente (N-1) :"
+                f"Événements ayant dépassé de plus de +{seuil_pct}% la moyenne des 3 semaines précédentes (pour le même jour et la même période) :"
             )
             st.dataframe(
                 depassements_synthese.rename(
@@ -279,15 +266,15 @@ if fichier is not None:
                         "Jour_Semaine": "Jour",
                         "Période": "Période concernée",
                         "Valeur_Max": "Puissance Max Atteinte",
-                        "Moyenne_N_1": "Moyenne Période Semaine N-1",
+                        "Moyenne_3_Sém_Prec": "Moyenne 3 Semaines Précédentes",
                         "Nb_Points_Anormaux": "Nombre de relevés en dépassement",
                     }
                 ).style.format(
                     {
                         "Puissance Max Atteinte": "{:.2f}",
-                        "Moyenne Période Semaine N-1": "{:.2f}",
+                        "Moyenne 3 Semaines Précédentes": "{:.2f}",
                     }
                 )
             )
         else:
-            st.success("Aucun dépassement détecté par rapport aux périodes (Jour/Nuit) de la semaine N-1.")
+            st.success("Aucun dépassement détecté par rapport à la moyenne des 3 semaines précédentes.")
