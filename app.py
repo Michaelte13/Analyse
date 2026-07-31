@@ -218,12 +218,11 @@ if fichier is not None:
                 synthese_journaliere["Moyenne_Constatee"] > synthese_journaliere["Limite_Haute"]
             ].copy()
 
-            st.metric(
-                "🔴 Périodes (Jour/Nuit) avec dépassement de moyenne",
-                f"{len(depassements_synthese)} événement(s)",
-            )
-
             if not depassements_synthese.empty:
+                st.metric(
+                    "🔴 Périodes (Jour/Nuit) avec dépassement de moyenne",
+                    f"{len(depassements_synthese)} événement(s)",
+                )
                 st.warning(
                     f"Périodes ayant une moyenne de consommation supérieure de plus de +{seuil_pct}% par rapport à la moyenne des 3 semaines précédentes :"
                 )
@@ -249,7 +248,7 @@ if fichier is not None:
                     )
                 )
             else:
-                st.success("Aucune période ne dépasse la moyenne des 3 semaines précédentes au seuil sélectionné.")
+                st.success("Pas de dépassement")
 
         # -------------------------------------------------------------
         # ONGLET 3 : DÉPASSEMENTS DE LA PUISSANCE CONTRACTUELLE
@@ -289,22 +288,18 @@ if fichier is not None:
             else:
                 duree_str = f"{minutes_duree} min"
 
-            # Indicateurs visuels
-            col_v1, col_v2, col_v3, col_v4 = st.columns(4)
-            col_v1.metric("⏱️ Temps au-dessus du contrat", duree_str)
-            col_v2.metric("📊 Nb de relevés en dépassement", f"{nb_occurrences}")
-            col_v3.metric("🔥 Puissance Max Atteinte", f"{valeur_max_absolue:.2f} kW")
-            
-            ecart_max = valeur_max_absolue - puissance_souscrite
-            if ecart_max > 0:
-                col_v4.metric("📈 Dépassement Max", f"+{ecart_max:.2f} kW")
-            else:
-                col_v4.metric("📈 Dépassement Max", "Aucun")
-
-            st.markdown("---")
-
-            # Affichage du tableau détaillé
+            # Affichage selon qu'il y ait dépassement ou non
             if not df_depassements_contrat.empty:
+                col_v1, col_v2, col_v3, col_v4 = st.columns(4)
+                col_v1.metric("⏱️ Temps au-dessus du contrat", duree_str)
+                col_v2.metric("📊 Nb de relevés en dépassement", f"{nb_occurrences}")
+                col_v3.metric("🔥 Puissance Max Atteinte", f"{valeur_max_absolue:.2f} kW")
+                
+                ecart_max = valeur_max_absolue - puissance_souscrite
+                col_v4.metric("📈 Dépassement Max", f"+{ecart_max:.2f} kW")
+
+                st.markdown("---")
+
                 st.warning(
                     f"⚠️ Le contrat ({puissance_souscrite:.2f} kW) a été dépassé pendant un cumul de **{duree_str}** sur la période sélectionnée."
                 )
@@ -336,4 +331,4 @@ if fichier is not None:
                     use_container_width=True,
                 )
             else:
-                st.success(f"✅ Aucun dépassement de la puissance souscrite ({puissance_souscrite:.2f} kW) sur la période sélectionnée.")
+                st.success("Pas de dépassement")
