@@ -52,12 +52,10 @@ if fichier is not None:
 
     options_filtre = [
         "Toutes les données",
-        "--- Saisons ---",
         "❄️ Hiver",
         "🌸 Printemps",
         "☀️ Été",
         "🍂 Automne",
-        "--- Mois ---",
         "01 - Janvier",
         "02 - Février",
         "03 - Mars",
@@ -94,7 +92,7 @@ if fichier is not None:
         "12 - Décembre": 12,
     }
 
-    if choix_filtre in ["--- Saisons ---", "--- Mois ---", "Toutes les données"]:
+    if choix_filtre == "Toutes les données":
         df_filtre = df.copy()
 
     elif choix_filtre == "❄️ Hiver":
@@ -205,7 +203,7 @@ if fichier is not None:
             step=5,
         )
 
-        # Synthese journaliere
+        # Synthèse journalière
         synthese_journaliere = (
             df_filtre.groupby(["Date_Jour", "Jour_Semaine", "Période"])[col_y]
             .mean()
@@ -279,7 +277,7 @@ if fichier is not None:
         else:
             pas_de_temps_min = 10
 
-        # Récupération des N plus hautes puissances distinctes ou de la valeur max absolue
+        # Récupération de la valeur max absolue
         valeur_max_absolue = df_filtre[col_y].max()
 
         # Groupe par valeur maximale
