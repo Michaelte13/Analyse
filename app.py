@@ -133,7 +133,7 @@ if fichier is not None:
             df_filtre = df.copy()
 
     # -------------------------------------------------------------
-    # AFFICHAGE DE DES RÉSULTATS
+    # AFFICHAGE DES RÉSULTATS
     # -------------------------------------------------------------
     if df_filtre.empty:
         st.warning("Aucune donnée disponible pour la période sélectionnée.")
@@ -145,7 +145,7 @@ if fichier is not None:
         # -------------------------------------------------------------
         # ANALYSE JOUR / NUIT & ANOMALIES
         # -------------------------------------------------------------
-        st.subheader("1. Moyennes par jour de la semaine (Jour vs Nuit)")
+        st.subheader("1. Moyennes globales par jour de la semaine (Jour vs Nuit)")
 
         col_h1, col_h2 = st.columns(2)
         with col_h1:
@@ -169,8 +169,10 @@ if fichier is not None:
         df_filtre["Période"] = "🌙 Nuit"
         df_filtre.loc[est_jour, "Période"] = "☀️ Jour"
 
-        # Date exacte pour grouper par jour
+        # Date exacte et identification de la semaine (Année, Semaine ISO)
         df_filtre["Date_Jour"] = df_filtre[col_x].dt.date
+        df_filtre["Annee"] = df_filtre[col_x].dt.isocalendar().year
+        df_filtre["Semaine"] = df_filtre[col_x].dt.isocalendar().week
 
         jours_fr = [
             "1. Lundi",
@@ -185,13 +187,7 @@ if fichier is not None:
             lambda x: jours_fr[x] if pd.notnull(x) else None
         )
 
-        # Calcul de la moyenne de référence par type de jour et période
-        moyennes = df_filtre.groupby(["Jour_Semaine", "Période"])[
-            col_y
-        ].transform("mean")
-        df_filtre["Moyenne_Reference"] = moyennes
-
-        # Affichage du tableau récapitulatif
+        # Affichage du tableau récapitulatif global
         tableau_moyennes = (
             df_filtre.groupby(["Jour_Semaine", "Période"])[col_y]
             .mean()
@@ -202,28 +198,61 @@ if fichier is not None:
 
         st.markdown("---")
 
-        # --- SYNTHÈSE DES ANOMALIES PAR JOUR CONCERNÉ ---
-        st.subheader("2. Jours impactés par des dépassements ou creux")
+        # -------------------------------------------------------------
+        # 2. DÉTECTION DES ANOMALIES (RÉFÉRENCE : SEMAINE PRÉCÉDENTE)
+        # -------------------------------------------------------------
+        st.subheader("2. Anomalies comparées à la semaine précédente (N vs N-1)")
 
         seuil_pct = st.slider(
-            "Seuil d'écart par rapport à la moyenne (%)",
+            "Seuil d'écart par rapport à la semaine précédente (%)",
             min_value=5,
             max_value=100,
             value=20,
             step=5,
         )
 
-        df_filtre["Limite_Haute"] = df_filtre["Moyenne_Reference"] * (
-            1 + seuil_pct / 100
-        )
-        df_filtre["Limite_Basse"] = df_filtre["Moyenne_Reference"] * (
-            1 - seuil_pct / 100
+        # 1. Calcul des moyennes hebdomadaires par (Année, Semaine, Jour, Période)
+        moyennes_hebdo = (
+            df_filtre.groupby(["Annee", "Semaine", "Jour_Semaine", "Période"])[col_y]
+            .mean()
+            .reset_index()
+            .rename(columns={col_y: "Moyenne_Semaine"})
         )
 
-        # Détection des points hors limites
-        df_filtre["Est_Depassement"] = (
-            df_filtre[col_y] > df_filtre["Limite_Haute"]
+        # 2. Création de la clé 'Semaine_Suivante' pour faire la jonction avec N+1
+        # Calcul de la semaine suivante de manière robuste
+        moyennes_hebdo["Date_Repere"] = pd.to_datetime(
+            moyennes_hebdo["Annee"].astype(str) + "-W" + moyennes_hebdo["Semaine"].astype(str) + "-1",
+            format="%G-W%V-%u"
         )
+        moyennes_hebdo["Date_Semaine_Suivante"] = moyennes_hebdo["Date_Repere"] + pd.Timedelta(weeks=1)
+        
+        moyennes_hebdo["Annee_Suivante"] = moyennes_hebdo["Date_Semaine_Suivante"].dt.isocalendar().year
+        moyennes_hebdo["Semaine_Suivante"] = moyennes_hebdo["Date_Semaine_Suivante"].dt.isocalendar().week
+
+        # 3. Fusion (Merge) : Associer la semaine N à la moyenne de la semaine N-1
+        df_filtre = df_filtre.merge(
+            moyennes_hebdo[["Annee_Suivante", "Semaine_Suivante", "Jour_Semaine", "Période", "Moyenne_Semaine"]],
+            left_on=["Annee", "Semaine", "Jour_Semaine", "Période"],
+            right_on=["Annee_Suivante", "Semaine_Suivante", "Jour_Semaine", "Période"],
+            how="left"
+        ).rename(columns={"Moyenne_Semaine": "Moyenne_Semaine_Precedente"})
+
+        # Nettoyage des colonnes temporaires issues du merge
+        df_filtre.drop(columns=["Annee_Suivante", "Semaine_Suivante"], errors="ignore", inplace=True)
+
+        # Si pas de semaine précédente disponible (ex: 1ère semaine du fichier),
+        # on se rabat sur la moyenne du jour dans le fichier
+        df_filtre["Moyenne_Reference"] = df_filtre["Moyenne_Semaine_Precedente"].fillna(
+            df_filtre.groupby(["Jour_Semaine", "Période"])[col_y].transform("mean")
+        )
+
+        # 4. Calcul des limites haute et basse
+        df_filtre["Limite_Haute"] = df_filtre["Moyenne_Reference"] * (1 + seuil_pct / 100)
+        df_filtre["Limite_Basse"] = df_filtre["Moyenne_Reference"] * (1 - seuil_pct / 100)
+
+        # Détection des points hors limites
+        df_filtre["Est_Depassement"] = df_filtre[col_y] > df_filtre["Limite_Haute"]
         df_filtre["Est_Creux"] = df_filtre[col_y] < df_filtre["Limite_Basse"]
 
         # REGROUPEMENT PAR DATE ET PÉRIODE
@@ -232,7 +261,7 @@ if fichier is not None:
             .groupby(["Date_Jour", "Jour_Semaine", "Période"])
             .agg(
                 Valeur_Max=(col_y, "max"),
-                Moyenne_Habituelle=("Moyenne_Reference", "first"),
+                Moyenne_N_1=("Moyenne_Reference", "first"),
                 Nb_Points_Anormaux=(col_y, "count"),
             )
             .reset_index()
@@ -243,7 +272,7 @@ if fichier is not None:
             .groupby(["Date_Jour", "Jour_Semaine", "Période"])
             .agg(
                 Valeur_Min=(col_y, "min"),
-                Moyenne_Habituelle=("Moyenne_Reference", "first"),
+                Moyenne_N_1=("Moyenne_Reference", "first"),
                 Nb_Points_Anormaux=(col_y, "count"),
             )
             .reset_index()
@@ -252,11 +281,11 @@ if fichier is not None:
         # Metrics
         col_m1, col_m2 = st.columns(2)
         col_m1.metric(
-            "🔴 Jours avec dépassement",
+            "🔴 Jours avec dépassement (vs Semaine N-1)",
             f"{len(depassements_synthese)} événement(s)",
         )
         col_m2.metric(
-            "🔵 Jours en sous-consommation",
+            "🔵 Jours en sous-consommation (vs Semaine N-1)",
             f"{len(creux_synthese)} événement(s)",
         )
 
@@ -270,7 +299,7 @@ if fichier is not None:
         with subtab_haut:
             if not depassements_synthese.empty:
                 st.warning(
-                    f"Jours et périodes ayant dépassé de plus de +{seuil_pct}% la moyenne :"
+                    f"Jours et périodes ayant dépassé de plus de +{seuil_pct}% par rapport au même jour de la semaine précédente (N-1) :"
                 )
                 st.dataframe(
                     depassements_synthese.rename(
@@ -278,23 +307,23 @@ if fichier is not None:
                             "Date_Jour": "Date",
                             "Jour_Semaine": "Jour",
                             "Valeur_Max": "Puissance Max Atteinte",
-                            "Moyenne_Habituelle": "Moyenne Attendue",
+                            "Moyenne_N_1": "Moyenne Semaine N-1",
                             "Nb_Points_Anormaux": "Nombre de relevés hors norme",
                         }
                     ).style.format(
                         {
                             "Puissance Max Atteinte": "{:.2f}",
-                            "Moyenne Attendue": "{:.2f}",
+                            "Moyenne Semaine N-1": "{:.2f}",
                         }
                     )
                 )
             else:
-                st.info("Aucun jour concerné par un dépassement.")
+                st.info("Aucun jour concerné par un dépassement par rapport à N-1.")
 
         with subtab_bas:
             if not creux_synthese.empty:
                 st.info(
-                    f"Jours et périodes inférieurs de plus de -{seuil_pct}% à la moyenne :"
+                    f"Jours et périodes inférieurs de plus de -{seuil_pct}% par rapport au même jour de la semaine précédente (N-1) :"
                 )
                 st.dataframe(
                     creux_synthese.rename(
@@ -302,15 +331,15 @@ if fichier is not None:
                             "Date_Jour": "Date",
                             "Jour_Semaine": "Jour",
                             "Valeur_Min": "Puissance Min Atteinte",
-                            "Moyenne_Habituelle": "Moyenne Attendue",
+                            "Moyenne_N_1": "Moyenne Semaine N-1",
                             "Nb_Points_Anormaux": "Nombre de relevés hors norme",
                         }
                     ).style.format(
                         {
                             "Puissance Min Atteinte": "{:.2f}",
-                            "Moyenne Attendue": "{:.2f}",
+                            "Moyenne Semaine N-1": "{:.2f}",
                         }
                     )
                 )
             else:
-                st.info("Aucun jour concerné par un creux de consommation.")
+                st.info("Aucun jour concerné par un creux de consommation par rapport à N-1.")
