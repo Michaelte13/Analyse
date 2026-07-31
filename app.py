@@ -42,28 +42,78 @@ if fichier is not None:
     df = df.dropna(subset=[col_x])
 
     # -------------------------------------------------------------
-    # FILTRE PAR PÉRIODE & SAISON
+    # FILTRE PAR MOIS / SAISON / PERIODE (MENU DÉROULANT)
     # -------------------------------------------------------------
     st.sidebar.markdown("---")
-    st.sidebar.header("📅 Filtre Temporel & Saisons")
+    st.sidebar.header("📅 Filtre Temporel")
 
     date_min = df[col_x].min().date()
     date_max = df[col_x].max().date()
 
-    saison = st.sidebar.radio(
+    # Définition des options pour le menu déroulant
+    options_filtre = [
+        "Toutes les données",
+        "--- Saisons ---",
+        "❄️ Hiver",
+        "☀️ Été",
+        "🍂 Mi-saison",
+        "--- Mois ---",
+        "01 - Janvier",
+        "02 - Février",
+        "03 - Mars",
+        "04 - Avril",
+        "05 - Mai",
+        "06 - Juin",
+        "07 - Juillet",
+        "08 - Août",
+        "09 - Septembre",
+        "10 - Octobre",
+        "11 - Novembre",
+        "12 - Décembre",
+        "--- Personnalisé ---",
+        "✏️ Plage de dates",
+    ]
 
-        "Sélection rapide :",
-        ["Toutes les données", "❄️ Hiver", "☀️ Été", "🍂 Mi-saison", "✏️ Personnalisé"],
+    choix_filtre = st.sidebar.selectbox(
+        "Sélectionner la période :",
+        options_filtre,
         index=0,
     )
 
-    if saison == "❄️ Hiver":
+    # Dictionnaire de correspondance Mois -> Numéro de mois
+    mois_dict = {
+        "01 - Janvier": 1,
+        "02 - Février": 2,
+        "03 - Mars": 3,
+        "04 - Avril": 4,
+        "05 - Mai": 5,
+        "06 - Juin": 6,
+        "07 - Juillet": 7,
+        "08 - Août": 8,
+        "09 - Septembre": 9,
+        "10 - Octobre": 10,
+        "11 - Novembre": 11,
+        "12 - Décembre": 12,
+    }
+
+    # Application de la logique de filtrage
+    if choix_filtre in ["--- Saisons ---", "--- Mois ---", "--- Personnalisé ---", "Toutes les données"]:
+        df_filtre = df.copy()
+
+    elif choix_filtre == "❄️ Hiver":
         df_filtre = df[df[col_x].dt.month.isin([12, 1, 2, 3])].copy()
-    elif saison == "☀️ Été":
+
+    elif choix_filtre == "☀️ Été":
         df_filtre = df[df[col_x].dt.month.isin([6, 7, 8])].copy()
-    elif saison == "🍂 Mi-saison":
+
+    elif choix_filtre == "🍂 Mi-saison":
         df_filtre = df[df[col_x].dt.month.isin([4, 5, 9, 10, 11])].copy()
-    elif saison == "✏️ Personnalisé":
+
+    elif choix_filtre in mois_dict:
+        mois_num = mois_dict[choix_filtre]
+        df_filtre = df[df[col_x].dt.month == mois_num].copy()
+
+    elif choix_filtre == "✏️ Plage de dates":
         plage_dates = st.sidebar.date_input(
             "Choisir la plage de dates :",
             value=(date_min, date_max),
@@ -78,9 +128,10 @@ if fichier is not None:
             ].copy()
         else:
             df_filtre = df.copy()
-    else:
-        df_filtre = df.copy()
 
+    # -------------------------------------------------------------
+    # AFFICHAGE DE DES RÉSULTATS
+    # -------------------------------------------------------------
     if df_filtre.empty:
         st.warning("Aucune donnée disponible pour la période sélectionnée.")
     else:
